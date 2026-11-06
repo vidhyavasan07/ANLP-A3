@@ -1,0 +1,64 @@
+name: Publish source to Kaggle
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out GitHub repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install Kaggle CLI
+        run: python -m pip install --upgrade kaggle
+
+      - name: Prepare Kaggle kernel bundle
+        env:
+          KAGGLE_KERNEL_ID: ${{ vars.KAGGLE_KERNEL_ID }}
+        run: |
+          if [ -z "$KAGGLE_KERNEL_ID" ]; then
+            echo "Set the repository variable KAGGLE_KERNEL_ID to your Kaggle kernel ID (username/kernel-slug)."
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/kaggle-kernel"
+          cp src/transformer.py src/char_tokenizer.py src/sequence_dataset.py "$RUNNER_TEMP/kaggle-kernel/"
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          metadata = {
+              "id": os.environ["KAGGLE_KERNEL_ID"],
+              "title": os.environ["KAGGLE_KERNEL_ID"].split("/")[-1].replace("-", " ").title(),
+              "code_file": "transformer.py",
+              "language": "python",
+              "kernel_type": "script",
+              "is_private": "true",
+              "enable_gpu": "true",
+              "enable_internet": "false",
+              "dataset_sources": [],
+              "competition_sources": [],
+              "kernel_sources": [],
+              "model_sources": [],
+          }
+          path = Path(os.environ["RUNNER_TEMP"]) / "kaggle-kernel" / "kernel-metadata.json"
+          path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Publish a new Kaggle kernel version
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: kaggle kernels push --path "$RUNNER_TEMP/kaggle-kernel" --no-run
