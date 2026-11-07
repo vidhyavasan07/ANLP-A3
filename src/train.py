@@ -28,14 +28,17 @@ try:  # Support both ``python src/train.py`` and ``python -m src.train``.
     from .char_tokenizer import CharacterTokenizer
     from .sequence_dataset import PairedTextDataset, collate_sequences
     from .transformer import DecoderOnlyTransformer
+    from .mamba import MambaLanguageModel
 except ImportError:
     from char_tokenizer import CharacterTokenizer
     from sequence_dataset import PairedTextDataset, collate_sequences
     from transformer import DecoderOnlyTransformer
+    from mamba import MambaLanguageModel
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", choices=("transformer", "mamba"), default="transformer")
     parser.add_argument(
         "--data-dir",
         type=Path,
@@ -50,6 +53,9 @@ def parse_args():
     parser.add_argument("--n-layers", type=int, default=2)
     parser.add_argument("--d-ff", type=int, default=512)
     parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--d-state", type=int, default=16)
+    parser.add_argument("--d-conv", type=int, default=4)
+    parser.add_argument("--expand", type=int, default=2)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--max-train-samples", type=int, default=0,
@@ -234,7 +240,11 @@ def main():
         "dropout": args.dropout,
         "pad_id": tokenizer.pad_id,
     }
-    model = DecoderOnlyTransformer(**model_config).to(device)
+    model_config.update(
+        {"d_state": args.d_state, "d_conv": args.d_conv, "expand": args.expand}
+    )
+    model_class = DecoderOnlyTransformer if args.model == "transformer" else MambaLanguageModel
+    model = model_class(**model_config).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
     )
