@@ -12,14 +12,23 @@ except ImportError:
     from mamba import MambaLanguageModel
 
 
-def find_test_files(root):
-    root = Path(root)
-    for cipher_path in sorted(root.rglob("cipher.jsonl")):
-        if cipher_path.parent.name == "test":
-            cleaned_path = cipher_path.with_name("cleaned.jsonl")
-            if cleaned_path.is_file():
-                return cipher_path, cleaned_path
-    raise FileNotFoundError(f"Could not find test/cipher.jsonl and test/cleaned.jsonl under {root}")
+def find_test_files(test_data):
+    test_data = Path(test_data)
+    if test_data.is_file():
+        raise ValueError("--test-data must be a directory")
+    candidates = [test_data]
+    if test_data.name not in {"test", "test-data"}:
+        candidates.append(test_data / "test")
+        candidates.append(test_data / "test-data")
+    for candidate in candidates:
+        cipher_path = candidate / "cipher.jsonl"
+        text_path = candidate / "cleaned.jsonl"
+        if cipher_path.is_file() and text_path.is_file():
+            return cipher_path, text_path
+    raise FileNotFoundError(
+        f"Could not find cipher.jsonl and cleaned.jsonl in {test_data}, {test_data / 'test'}, "
+        f"or {test_data / 'test-data'}"
+    )
 
 
 def generate(model, tokenizer, ciphertext, max_seq_len, device):
@@ -45,7 +54,7 @@ def generate(model, tokenizer, ciphertext, max_seq_len, device):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--test-data", "--data-dir", dest="test_data", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
@@ -55,7 +64,7 @@ def main():
     model = MambaLanguageModel(**config).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     tokenizer = CharacterTokenizer.from_state_dict(checkpoint["tokenizer"])
-    cipher_path, text_path = find_test_files(args.data_dir)
+    cipher_path, text_path = find_test_files(args.test_data)
 
     predictions = []
     exact_matches = 0
