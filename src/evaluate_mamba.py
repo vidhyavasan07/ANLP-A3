@@ -17,9 +17,10 @@ def find_test_files(test_data):
     if test_data.is_file():
         raise ValueError("--test-data must be a directory")
     candidates = [test_data]
-    if test_data.name not in {"test", "test-data"}:
+    if test_data.name not in {"test", "test-data", "test_data"}:
         candidates.append(test_data / "test")
         candidates.append(test_data / "test-data")
+        candidates.append(test_data / "test_data")
     for candidate in candidates:
         cipher_path = candidate / "cipher.jsonl"
         text_path = candidate / "cleaned.jsonl"
@@ -27,7 +28,7 @@ def find_test_files(test_data):
             return cipher_path, text_path
     raise FileNotFoundError(
         f"Could not find cipher.jsonl and cleaned.jsonl in {test_data}, {test_data / 'test'}, "
-        f"or {test_data / 'test-data'}"
+        f"{test_data / 'test-data'}, or {test_data / 'test_data'}"
     )
 
 
