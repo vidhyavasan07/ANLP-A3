@@ -383,9 +383,12 @@ def main():
                 repo_id=args.hf_repo_id,
                 repo_type="model",
                 token=hf_token,
+                path_in_repo=args.model,
                 commit_message=f"Upload trained A3 {args.model} checkpoint",
             )
-            print(f"Uploaded model files to https://huggingface.co/{args.hf_repo_id}")
+            print(
+                f"Uploaded model files to https://huggingface.co/{args.hf_repo_id}/tree/main/{args.model}"
+            )
 
         if run is not None:
             artifact = wandb.Artifact(f"a3-{args.model}", type="model")
