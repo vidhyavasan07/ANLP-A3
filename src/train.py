@@ -1,10 +1,11 @@
-"""Train the character-level cipher-to-text transformer.
+"""Train a character-level cipher-to-text Transformer or Mamba model.
 
 Typical Kaggle usage from the repository root::
 
     python src/train.py \
         --data-dir /kaggle/input/YOUR-DATASET/data \
-        --output-dir /kaggle/working/a3-transformer \
+        --model mamba \
+        --output-dir /kaggle/working/a3-mamba \
         --hf-repo-id YOUR-HF-USERNAME/a3-transformer \
         --wandb-project a3-transformer
 
@@ -44,7 +45,7 @@ def parse_args():
         type=Path,
         help="Directory containing train/ and optionally validation/; auto-detected if omitted.",
     )
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/a3-transformer"))
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--max-seq-len", type=int, default=256)
@@ -159,6 +160,8 @@ def evaluate(model, loader, device):
 
 def main():
     args = parse_args()
+    if args.output_dir is None:
+        args.output_dir = Path(f"outputs/a3-{args.model}")
     if args.epochs < 1 or args.batch_size < 1 or args.n_heads < 1 or args.n_layers < 1:
         raise ValueError("epochs, batch-size, n-heads, and n-layers must be positive")
     if args.log_every < 1 or args.num_workers < 0:
@@ -267,6 +270,7 @@ def main():
             name=args.wandb_run_name,
             config={
                 **model_config,
+                "model_type": args.model,
                 "epochs": args.epochs,
                 "batch_size": args.batch_size,
                 "learning_rate": args.learning_rate,
@@ -353,6 +357,7 @@ def main():
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "model_config": model_config,
+                    "model_type": args.model,
                     "tokenizer": tokenizer.state_dict(),
                     "epoch": epoch,
                     "global_step": global_step,
@@ -378,12 +383,12 @@ def main():
                 repo_id=args.hf_repo_id,
                 repo_type="model",
                 token=hf_token,
-                commit_message="Upload trained A3 transformer checkpoint",
+                commit_message=f"Upload trained A3 {args.model} checkpoint",
             )
             print(f"Uploaded model files to https://huggingface.co/{args.hf_repo_id}")
 
         if run is not None:
-            artifact = wandb.Artifact("a3-transformer", type="model")
+            artifact = wandb.Artifact(f"a3-{args.model}", type="model")
             artifact.add_file(str(checkpoint_path))
             artifact.add_file(str(config_path))
             artifact.add_file(str(tokenizer_path))
