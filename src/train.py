@@ -4,7 +4,7 @@ import os
 import random
 from functools import partial
 from pathlib import Path
-
+import time
 import torch
 from torch.utils.data import DataLoader, Subset
 
@@ -339,6 +339,7 @@ def main():
             model.train()
             running_loss = 0.0
             epoch_batches = 0
+            epoch_start = time.time()
 
             for batch_index, (input_ids, targets) in enumerate(train_loader, start=1):
                 input_ids = input_ids.to(device, non_blocking=True)
@@ -360,11 +361,14 @@ def main():
             
                 if batch_index % args.log_every == 0:
                     print(
-                        f"epoch {epoch}/{args.epochs}, batch {batch_index}/"
-                        f"{steps_per_epoch}, loss {loss.item():.4f}"
-                    )
+                           f"epoch {epoch}/{args.epochs}, batch {batch_index}/"
+                           f"{steps_per_epoch}, loss {loss.item():.4f}, "
+                           f"{time.time() - epoch_start:.0f}s, "
+                           f"peak mem {torch.cuda.max_memory_allocated() / 1e9:.1f}GB"
+                       )
                 if batch_index >= steps_per_epoch:
                     break
+                
 
             train_loss = running_loss / max(epoch_batches, 1)
             """validation_loss = (
