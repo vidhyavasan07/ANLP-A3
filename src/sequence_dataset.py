@@ -3,7 +3,7 @@ import torch
 from torch.utils.data import Dataset
 
 
-def build_input_target(ciphertext, plaintext, tokenizer, max_seq_len):
+"""def build_input_target(ciphertext, plaintext, tokenizer, max_seq_len):
     if max_seq_len < 4:
         raise ValueError("max_seq_len must be at least 4")
 
@@ -23,6 +23,36 @@ def build_input_target(ciphertext, plaintext, tokenizer, max_seq_len):
 
     # The target at the SEP position is the first plaintext token, so only
     # positions before SEP are masked from the language-model loss.
+    sep_position = len(cipher_ids) + 1
+    targets[:sep_position] = tokenizer.pad_id
+    return input_ids, targets
+"""
+def build_input_target(ciphertext, plaintext, tokenizer, max_seq_len):
+    if max_seq_len < 4:
+        raise ValueError("max_seq_len must be at least 4")
+
+    cipher_ids = tokenizer.encode(ciphertext)
+    text_ids = tokenizer.encode(plaintext)
+
+    budget = max_seq_len - 2
+    if len(cipher_ids) + len(text_ids) > budget:
+        ratio = len(cipher_ids) / max(len(text_ids), 1)
+        text_limit = max(1, int((budget - 8) / (1 + 1.02 * ratio)))
+        cipher_limit = max(1, min(len(cipher_ids), budget - text_limit))
+    else:
+        text_limit = len(text_ids)
+        cipher_limit = len(cipher_ids)
+
+    clipped = len(text_ids) > text_limit
+    cipher_ids = cipher_ids[:cipher_limit]
+    text_ids = text_ids[:text_limit]
+
+    full_ids = [tokenizer.bos_id, *cipher_ids, tokenizer.sep_id, *text_ids]
+    if not clipped:
+        full_ids.append(tokenizer.eos_id)
+    input_ids = torch.tensor(full_ids[:-1], dtype=torch.long)
+    targets = torch.tensor(full_ids[1:], dtype=torch.long)
+
     sep_position = len(cipher_ids) + 1
     targets[:sep_position] = tokenizer.pad_id
     return input_ids, targets

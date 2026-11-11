@@ -1,5 +1,5 @@
 import math
-
+from torch.utils.checkpoint import checkpoint
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -37,7 +37,7 @@ class SelectiveStateSpace(nn.Module):
             y = (state * C[:, index].unsqueeze(1)).sum(dim=-1)
             outputs.append(y + self.D * x[:, index])
         return torch.stack(outputs, dim=1)
-    """
+    
     def forward(self, x, chunk=16):
         Bsz, L, D = x.shape
         dt_f, Bm, Cm = torch.split(self.in_proj(x), [self.dt_rank, self.d_state, self.d_state], dim=-1)
@@ -54,6 +54,30 @@ class SelectiveStateSpace(nn.Module):
             state = h[:, -1]
             ys.append((h * Cm[:, s:s+chunk].unsqueeze(2)).sum(-1))
         return torch.cat(ys, 1) + self.D * x
+    """
+    def forward(self, x, chunk=16):
+        batch_size, seq_len, _ = x.shape
+        dtype = x.dtype
+        parameters = self.in_proj(x)
+        dt_features, B, C = torch.split(parameters, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        dt = F.softplus(self.dt_proj(dt_features)).float()
+        B = B.float()
+        C = C.float()
+        xf = x.float()
+        A = -torch.exp(self.A_log.float())
+        log_decay = (dt.unsqueeze(-1) * A).clamp(min=-5.0)
+        drive = dt.unsqueeze(-1) * B.unsqueeze(2) * xf.unsqueeze(-1)
+        state = xf.new_zeros(batch_size, self.d_inner, self.d_state)
+        outputs = []
+        for start in range(0, seq_len, chunk):
+            a = log_decay[:, start:start + chunk]
+            b = drive[:, start:start + chunk]
+            cum = a.cumsum(1)
+            h = torch.exp(cum) * (state.unsqueeze(1) + torch.cumsum(b * torch.exp(-cum), 1))
+            state = h[:, -1]
+            outputs.append((h * C[:, start:start + chunk].unsqueeze(2)).sum(-1))
+        y = torch.cat(outputs, 1) + self.D.float() * xf
+        return y.to(dtype)
 
 
 class MambaBlock(nn.Module):
@@ -124,7 +148,10 @@ class MambaLanguageModel(nn.Module):
             raise ValueError("input sequence exceeds max_seq_len")
         x = self.embedding_dropout(self.token_embedding(input_ids))
         for block in self.blocks:
-            x = block(x)
+            if self.training and torch.is_grad_enabled():
+                x = checkpoint(block, x, use_reentrant=False)
+            else:
+                x = block(x)
         logits = self.lm_head(self.final_norm(x))
         if targets is None:
             return logits

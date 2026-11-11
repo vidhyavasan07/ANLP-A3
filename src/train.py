@@ -13,16 +13,20 @@ try:  # Support both ``python src/train.py`` and ``python -m src.train``.
     from .sequence_dataset import PairedTextDataset, collate_sequences
     from .transformer import DecoderOnlyTransformer
     from .mamba import MambaLanguageModel
+    from .deltanet import DeltaNetLanguageModel
 except ImportError:
     from char_tokenizer import CharacterTokenizer
     from sequence_dataset import PairedTextDataset, collate_sequences
     from transformer import DecoderOnlyTransformer
     from mamba import MambaLanguageModel
+    from deltanet import DeltaNetLanguageModel
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", choices=("transformer", "mamba"), default="transformer")
+    parser.add_argument(
+        "--model", choices=("transformer", "mamba", "deltanet"), default="transformer"
+    )
     parser.add_argument(
         "--data-dir",
         type=Path,
@@ -239,17 +243,24 @@ def main():
     model_config = {
         "vocab_size": tokenizer.vocab_size,
         "d_model": args.d_model,
-        "n_heads": args.n_heads,
         "n_layers": args.n_layers,
-        "d_ff": args.d_ff,
         "max_seq_len": args.max_seq_len,
         "dropout": args.dropout,
         "pad_id": tokenizer.pad_id,
     }
-    model_config.update(
-        {"d_state": args.d_state, "d_conv": args.d_conv, "expand": args.expand}
-    )
-    model_class = DecoderOnlyTransformer if args.model == "transformer" else MambaLanguageModel
+    if args.model == "transformer":
+        model_config.update({"n_heads": args.n_heads, "d_ff": args.d_ff})
+        model_class = DecoderOnlyTransformer
+    elif args.model == "mamba":
+        model_config.update(
+            {"d_state": args.d_state, "d_conv": args.d_conv, "expand": args.expand}
+        )
+        model_class = MambaLanguageModel
+    else:
+        model_config.update(
+            {"n_heads": args.n_heads, "d_conv": args.d_conv, "expand": args.expand}
+        )
+        model_class = DeltaNetLanguageModel
     model = model_class(**model_config).to(device)
     """optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
