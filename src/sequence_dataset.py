@@ -59,12 +59,13 @@ def build_input_target(ciphertext, plaintext, tokenizer, max_seq_len):
 
 
 class PairedTextDataset(Dataset):
-    def __init__(self, cipher_path, plaintext_path, tokenizer, max_seq_len):
+    def __init__(self, cipher_path, plaintext_path, tokenizer, max_seq_len, max_text_len=0):
         self.cipher_path = str(cipher_path)
         self.plaintext_path = str(plaintext_path)
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
         self._offsets = []
+    
 
         # Keep only byte offsets in memory; the training corpus itself can be
         # large. Validate pair IDs while building the index.
@@ -87,7 +88,8 @@ class PairedTextDataset(Dataset):
                         f"Mismatched pair IDs: {cipher_row.get('id')!r} and "
                         f"{plaintext_row.get('id')!r}"
                     )
-                
+                if max_text_len and len(plaintext_row["text"]) > max_text_len:
+                    continue
                 self._offsets.append((cipher_offset, plaintext_offset))
 
     def __len__(self):
