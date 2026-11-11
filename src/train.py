@@ -67,8 +67,10 @@ def find_split(root, split):
     if not root.exists():
         return None
     split_directories = {
-        "train": {"train-data"},
-        "validation": {"validation-data"},
+        "train": {"train", "train-data", "train_data", "train_data1"},
+        "validation": {
+            "validation", "validation-data", "validation_data", "validation_data1", "val"
+        },
     }.get(split, {split})
     for cipher_path in sorted(root.rglob("cipher.jsonl")):
         if cipher_path.parent.name not in split_directories:
