@@ -1,23 +1,9 @@
-"""Build decoder-only training sequences from paired ciphertext and text JSONL files."""
-
 import json
-
 import torch
 from torch.utils.data import Dataset
 
 
 def build_input_target(ciphertext, plaintext, tokenizer, max_seq_len):
-    """Encode one pair for next-token training.
-
-    The model receives ``<bos> ciphertext <sep> plaintext`` and learns to
-    predict only the plaintext and final ``<eos>``.  The ciphertext is prompt
-    context, so its next-token labels are set to ``pad_id`` and ignored by the
-    transformer's loss function.
-
-    ``max_seq_len`` is the number of input positions.  Long pairs are clipped
-    while preserving both ``<sep>`` and ``<eos>``; at least one plaintext
-    character is retained when the limit permits it.
-    """
     if max_seq_len < 4:
         raise ValueError("max_seq_len must be at least 4")
 
@@ -43,8 +29,6 @@ def build_input_target(ciphertext, plaintext, tokenizer, max_seq_len):
 
 
 class PairedTextDataset(Dataset):
-    """Read aligned ciphertext/plaintext JSONL files without loading them all."""
-
     def __init__(self, cipher_path, plaintext_path, tokenizer, max_seq_len):
         self.cipher_path = str(cipher_path)
         self.plaintext_path = str(plaintext_path)
@@ -73,6 +57,7 @@ class PairedTextDataset(Dataset):
                         f"Mismatched pair IDs: {cipher_row.get('id')!r} and "
                         f"{plaintext_row.get('id')!r}"
                     )
+                
                 self._offsets.append((cipher_offset, plaintext_offset))
 
     def __len__(self):

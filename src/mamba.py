@@ -21,7 +21,7 @@ class SelectiveStateSpace(nn.Module):
         with torch.no_grad():
             self.dt_proj.bias.copy_(inv_dt)
 
-    def forward(self, x):
+    """def forward(self, x):
         batch_size, seq_len, _ = x.shape
         parameters = self.in_proj(x)
         dt_features, B, C = torch.split(parameters, [self.dt_rank, self.d_state, self.d_state], dim=-1)
@@ -37,6 +37,23 @@ class SelectiveStateSpace(nn.Module):
             y = (state * C[:, index].unsqueeze(1)).sum(dim=-1)
             outputs.append(y + self.D * x[:, index])
         return torch.stack(outputs, dim=1)
+    """
+    def forward(self, x, chunk=16):
+        Bsz, L, D = x.shape
+        dt_f, Bm, Cm = torch.split(self.in_proj(x), [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        dt = F.softplus(self.dt_proj(dt_f))                      
+        A = -torch.exp(self.A_log.float())                       
+        dA  = dt.unsqueeze(-1) * A                              
+        dBx = dt.unsqueeze(-1) * Bm.unsqueeze(2) * x.unsqueeze(-1)
+        state = x.new_zeros(Bsz, D, self.d_state)
+        ys = []
+        for s in range(0, L, chunk):
+            a, b = dA[:, s:s+chunk], dBx[:, s:s+chunk]
+            cum = a.cumsum(1)
+            h = torch.exp(cum) * (state.unsqueeze(1) + torch.cumsum(b * torch.exp(-cum), 1))
+            state = h[:, -1]
+            ys.append((h * Cm[:, s:s+chunk].unsqueeze(2)).sum(-1))
+        return torch.cat(ys, 1) + self.D * x
 
 
 class MambaBlock(nn.Module):
@@ -90,6 +107,14 @@ class MambaLanguageModel(nn.Module):
         self.final_norm = nn.LayerNorm(d_model)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
         self.lm_head.weight = self.token_embedding.weight
+        nn.init.normal_(self.token_embedding.weight, mean=0.0, std=0.02)
+        if pad_id is not None:
+            with torch.no_grad():
+                self.token_embedding.weight[pad_id].zero_()
+        residual_scale = 1.0 / math.sqrt(2 * n_layers)
+        with torch.no_grad():
+            for block in self.blocks:
+                block.out_proj.weight.mul_(residual_scale)
 
     def forward(self, input_ids, targets=None):
         if input_ids.ndim != 2:

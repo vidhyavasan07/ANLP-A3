@@ -1,20 +1,3 @@
-"""Train a character-level cipher-to-text Transformer or Mamba model.
-
-Typical Kaggle usage from the repository root::
-
-    python src/train.py \
-        --data-dir /kaggle/input/YOUR-DATASET/data \
-        --model mamba \
-        --output-dir /kaggle/working/a3-mamba \
-        --hf-repo-id YOUR-HF-USERNAME/a3-transformer \
-        --wandb-project a3-transformer
-
-The training data directory should contain ``train/cipher.jsonl`` and
-``train/cleaned.jsonl``. A sibling ``validation`` directory is used when
-present. Cloud uploads are optional; credentials are read from environment
-variables or Kaggle Secrets and are never written to the checkpoint.
-"""
-
 import argparse
 import json
 import os
@@ -66,21 +49,21 @@ def parse_args():
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--log-every", type=int, default=50)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--hf-repo-id", help="Optional Hugging Face model repo, e.g. user/a3-transformer.")
-    parser.add_argument("--hf-private", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--wandb-project", help="Optional Weights & Biases project name.")
-    parser.add_argument("--wandb-run-name", help="Optional W&B run name.")
+    parser.add_argument("--hf-repo-id")
+    parser.add_argument("--hf-private")
+    parser.add_argument("--wandb-project")
+    parser.add_argument("--wandb-run-name")
+    parser.add_argument("--max-text-len", type=int, default=0)
     return parser.parse_args()
 
 
 def find_split(root, split):
-
     root = Path(root)
     if not root.exists():
         return None
     split_directories = {
-        "train": {"train", "train_data", "train-data"},
-        "validation": {"validation", "validation_data", "validation-data", "val"},
+        "train": {"train-data"},
+        "validation": {"validation-data"},
     }.get(split, {split})
     for cipher_path in sorted(root.rglob("cipher.jsonl")):
         if cipher_path.parent.name not in split_directories:
@@ -92,13 +75,10 @@ def find_split(root, split):
 
 
 def locate_data(data_dir):
-    
     roots = []
     if data_dir is not None:
         roots.append(Path(data_dir))
     roots.extend((Path("/kaggle/input"), Path(__file__).resolve().parents[1] / "data"))
-
-    # Remove duplicate roots while preserving the requested path first.
     unique_roots = []
     seen = set()
     for root in roots:
@@ -110,7 +90,6 @@ def locate_data(data_dir):
     for root in unique_roots:
         train_pair = find_split(root, "train")
         if train_pair is not None:
-            # Prefer validation under the same data root as the training split.
             validation_pair = find_split(train_pair[0].parent.parent, "validation")
             if validation_pair is None:
                 validation_pair = find_split(root, "validation")
@@ -143,7 +122,7 @@ def get_secret(name):
         return None
 
 
-def evaluate(model, loader, device):
+"""def evaluate(model, loader, device):
     model.eval()
     total_loss = 0.0
     total_batches = 0
@@ -156,7 +135,25 @@ def evaluate(model, loader, device):
             total_batches += 1
     model.train()
     return total_loss / total_batches if total_batches else None
-
+"""
+def evaluate(model, loader, device, pad_id):
+    model.eval()
+    total_loss, total_batches = 0.0, 0
+    correct, count = 0, 0
+    with torch.no_grad():
+        for input_ids, targets in loader:
+            input_ids = input_ids.to(device, non_blocking=True)
+            targets = targets.to(device, non_blocking=True)
+            logits, loss = model(input_ids, targets)
+            mask = targets != pad_id
+            correct += ((logits.argmax(-1) == targets) & mask).sum().item()
+            count += mask.sum().item()
+            total_loss += loss.item()
+            total_batches += 1
+    model.train()
+    if not total_batches:
+        return None, None
+    return total_loss / total_batches, correct / max(count, 1)
 
 def main():
     args = parse_args()
@@ -203,9 +200,14 @@ def main():
 
     # Build the vocabulary from training text only to avoid validation leakage.
     tokenizer = CharacterTokenizer.from_jsonl(train_cipher, train_text)
-    train_dataset = PairedTextDataset(
+    """train_dataset = PairedTextDataset(
         train_cipher, train_text, tokenizer, args.max_seq_len
     )
+    """
+    train_dataset = PairedTextDataset(
+       train_cipher, train_text, tokenizer, args.max_seq_len,
+       max_text_len=args.max_text_len,
+   )
     train_dataset = limit_dataset(train_dataset, args.max_train_samples)
     train_loader = DataLoader(
         train_dataset,
@@ -219,7 +221,8 @@ def main():
     validation_loader = None
     if validation_pair:
         validation_dataset = PairedTextDataset(
-            validation_pair[0], validation_pair[1], tokenizer, args.max_seq_len
+            validation_pair[0], validation_pair[1], tokenizer, args.max_seq_len,
+            max_text_len=args.max_text_len
         )
         validation_dataset = limit_dataset(
             validation_dataset, args.max_validation_samples
@@ -248,8 +251,29 @@ def main():
     )
     model_class = DecoderOnlyTransformer if args.model == "transformer" else MambaLanguageModel
     model = model_class(**model_config).to(device)
-    optimizer = torch.optim.AdamW(
+    """optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
+    )
+    """
+    decay, no_decay = [], []
+    for name, p in model.named_parameters():
+        if p.ndim < 2 or name.endswith(("A_log", ".D")):
+            no_decay.append(p)
+        else:
+            decay.append(p)
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": decay, "weight_decay": args.weight_decay},
+            {"params": no_decay, "weight_decay": 0.0},
+        ],
+        lr=args.learning_rate,
+    )
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=args.learning_rate,
+        total_steps=args.epochs * len(train_loader),
+        pct_start=0.05,
+        anneal_strategy="cos",
     )
 
     run = None
@@ -276,6 +300,7 @@ def main():
                 "learning_rate": args.learning_rate,
                 "weight_decay": args.weight_decay,
                 "seed": args.seed,
+                
             },
         )
 
@@ -306,12 +331,14 @@ def main():
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
+                scheduler.step()
 
                 global_step += 1
                 epoch_batches += 1
                 running_loss += loss.item()
                 if run is not None and global_step % args.log_every == 0:
-                    run.log({"train/loss": loss.item(), "epoch": epoch}, step=global_step)
+                    #run.log({"train/loss": loss.item(), "epoch": epoch}, step=global_step)
+                    run.log({"train/loss": loss.item(), "lr": scheduler.get_last_lr()[0], "epoch": epoch}, step=global_step)
                 if batch_index % args.log_every == 0:
                     print(
                         f"epoch {epoch}/{args.epochs}, batch {batch_index}/"
@@ -319,21 +346,38 @@ def main():
                     )
 
             train_loss = running_loss / max(epoch_batches, 1)
-            validation_loss = (
+            """validation_loss = (
                 evaluate(model, validation_loader, device)
                 if validation_loader is not None
                 else None
+            )
+            """
+            validation_loss, validation_acc = (
+                evaluate(model, validation_loader, device, tokenizer.pad_id)
+                if validation_loader is not None
+                else (None, None)
             )
             metrics = {
                 "epoch": epoch,
                 "train_loss": train_loss,
                 "validation_loss": validation_loss,
+                "validation_token_accuracy": validation_acc,
             }
             history.append(metrics)
-            print(
+            """print(
                 f"epoch {epoch}: train loss={train_loss:.4f}"
                 + (
                     f", validation loss={validation_loss:.4f}"
+                    if validation_loss is not None
+                    else ""
+                )
+            )
+            """
+            print(
+                f"epoch {epoch}: train loss={train_loss:.4f}"
+                + (
+                    f", validation loss={validation_loss:.4f}, "
+                    f"validation token acc={validation_acc:.4f}"
                     if validation_loss is not None
                     else ""
                 )
