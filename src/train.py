@@ -58,6 +58,7 @@ def parse_args():
     parser.add_argument("--wandb-project")
     parser.add_argument("--wandb-run-name")
     parser.add_argument("--max-text-len", type=int, default=0)
+    parser.add_argument("--steps-per-epoch", type=int, default=0)
     return parser.parse_args()
 
 
@@ -279,13 +280,19 @@ def main():
         ],
         lr=args.learning_rate,
     )
+    steps_per_epoch = (
+        min(len(train_loader), args.steps_per_epoch)
+        if args.steps_per_epoch > 0
+        else len(train_loader)
+    )
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
         max_lr=args.learning_rate,
-        total_steps=args.epochs * len(train_loader),
+        total_steps=args.epochs * steps_per_epoch,
         pct_start=0.05,
         anneal_strategy="cos",
     )
+   
 
     run = None
     if args.wandb_project:
@@ -350,11 +357,14 @@ def main():
                 if run is not None and global_step % args.log_every == 0:
                     #run.log({"train/loss": loss.item(), "epoch": epoch}, step=global_step)
                     run.log({"train/loss": loss.item(), "lr": scheduler.get_last_lr()[0], "epoch": epoch}, step=global_step)
+            
                 if batch_index % args.log_every == 0:
                     print(
                         f"epoch {epoch}/{args.epochs}, batch {batch_index}/"
-                        f"{len(train_loader)}, loss {loss.item():.4f}"
+                        f"{steps_per_epoch}, loss {loss.item():.4f}"
                     )
+                if batch_index >= steps_per_epoch:
+                    break
 
             train_loss = running_loss / max(epoch_batches, 1)
             """validation_loss = (
