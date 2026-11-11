@@ -62,7 +62,7 @@ def run_epoch(model, loader, device, criterion, optimizer=None):
     return metrics
 
 
-def train_one(model_name, seed, train_loader, validation_loader, test_loader, in_channels, args, device):
+def train_one(model_name, seed, train_loader, validation_loader, test_loader, in_channels, args, device, hub_api=None):
     set_seed(seed)
     model = build_model(
         model_name,
@@ -109,6 +109,15 @@ def train_one(model_name, seed, train_loader, validation_loader, test_loader, in
     test_metrics["best_epoch"] = best_epoch
     test_metrics["best_validation_f1"] = best_validation_f1
     test_metrics["checkpoint"] = str(checkpoint_path)
+    if hub_api is not None:
+        path_in_repo = f"architecture_comparison/{model_name}/seed_{seed}.pt"
+        hub_api.upload_file(
+            path_or_fileobj=str(checkpoint_path),
+            path_in_repo=path_in_repo,
+            repo_id=args.hf_repo_id,
+            repo_type="model",
+        )
+        test_metrics["hf_file"] = f"https://huggingface.co/{args.hf_repo_id}/blob/main/{path_in_repo}"
     return test_metrics
 
 
@@ -142,12 +151,20 @@ def parse_args():
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--checkpoint-dir", default="models/part2")
     parser.add_argument("--output", default="output/part2/architecture_comparison.json")
+    parser.add_argument("--hf-repo-id")
+    parser.add_argument("--hf-private", action="store_true")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     device = torch.device(args.device)
+    hub_api = None
+    if args.hf_repo_id:
+        from huggingface_hub import HfApi
+
+        hub_api = HfApi()
+        hub_api.create_repo(repo_id=args.hf_repo_id, repo_type="model", private=args.hf_private, exist_ok=True)
     train_dataset = UPFD(root=args.data_root, name="gossipcop", feature=args.feature, split="train")
     validation_dataset = UPFD(root=args.data_root, name="gossipcop", feature=args.feature, split="val")
     test_dataset = UPFD(root=args.data_root, name="gossipcop", feature=args.feature, split="test")
@@ -184,6 +201,7 @@ def main():
                     in_channels,
                     args,
                     device,
+                    hub_api,
                 )
             )
         results["models"][model_name] = {"runs": runs, "summary": summarize(runs)}
