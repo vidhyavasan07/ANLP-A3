@@ -130,8 +130,8 @@ class MambaLanguageModel(nn.Module):
         )
         self.final_norm = nn.LayerNorm(d_model)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
-        self.lm_head.weight = self.token_embedding.weight
         nn.init.normal_(self.token_embedding.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.02)
         if pad_id is not None:
             with torch.no_grad():
                 self.token_embedding.weight[pad_id].zero_()

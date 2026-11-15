@@ -3,31 +3,8 @@ import torch
 from torch.utils.data import Dataset
 
 
+
 """def build_input_target(ciphertext, plaintext, tokenizer, max_seq_len):
-    if max_seq_len < 4:
-        raise ValueError("max_seq_len must be at least 4")
-
-    cipher_ids = tokenizer.encode(ciphertext)
-    text_ids = tokenizer.encode(plaintext)
-
-    # Reserve space for BOS, SEP, EOS, and at least one target character.
-    # Keep the source prompt to roughly half the context for long examples.
-    cipher_limit = min(len(cipher_ids), max(1, (max_seq_len - 2) // 2))
-    cipher_ids = cipher_ids[:cipher_limit]
-    text_limit = max_seq_len - 2 - len(cipher_ids)
-    text_ids = text_ids[:text_limit]
-
-    full_ids = [tokenizer.bos_id, *cipher_ids, tokenizer.sep_id, *text_ids, tokenizer.eos_id]
-    input_ids = torch.tensor(full_ids[:-1], dtype=torch.long)
-    targets = torch.tensor(full_ids[1:], dtype=torch.long)
-
-    # The target at the SEP position is the first plaintext token, so only
-    # positions before SEP are masked from the language-model loss.
-    sep_position = len(cipher_ids) + 1
-    targets[:sep_position] = tokenizer.pad_id
-    return input_ids, targets
-"""
-def build_input_target(ciphertext, plaintext, tokenizer, max_seq_len):
     if max_seq_len < 4:
         raise ValueError("max_seq_len must be at least 4")
 
@@ -56,7 +33,16 @@ def build_input_target(ciphertext, plaintext, tokenizer, max_seq_len):
     sep_position = len(cipher_ids) + 1
     targets[:sep_position] = tokenizer.pad_id
     return input_ids, targets
+"""
+NOISE_SYMBOLS = frozenset("!'+,-./:;<=>?[]_{}")
 
+
+def build_input_target(ciphertext, plaintext, tokenizer, max_seq_len):
+    core = "".join(ch for ch in ciphertext if ch not in NOISE_SYMBOLS)
+    length = min(len(core), len(plaintext), max_seq_len)
+    input_ids = torch.tensor(tokenizer.encode(core[:length]), dtype=torch.long)
+    targets = torch.tensor(tokenizer.encode(plaintext[:length]), dtype=torch.long)
+    return input_ids, targets
 
 class PairedTextDataset(Dataset):
     def __init__(self, cipher_path, plaintext_path, tokenizer, max_seq_len, max_text_len=0):
