@@ -1,10 +1,40 @@
 import torch
+import math
 from torch import nn
 from torch.nn import functional as F
 
 
+def delta_rule_chunkwise(q, k, v, beta, chunk=64):
+    batch_size, n_heads, seq_len, head_dim = q.shape
+    pad = (-seq_len) % chunk
+    if pad:
+        q = F.pad(q, (0, 0, 0, pad))
+        k = F.pad(k, (0, 0, 0, pad))
+        v = F.pad(v, (0, 0, 0, pad))
+        beta = F.pad(beta, (0, pad))
+    n_chunks = (seq_len + pad) // chunk
+    shape = (batch_size, n_heads, n_chunks, chunk, head_dim)
+    q, k, v = q.reshape(shape), k.reshape(shape), v.reshape(shape)
+    beta = beta.reshape(batch_size, n_heads, n_chunks, chunk, 1)
+    kb = k * beta
+    vb = v * beta
+    strict = (kb @ k.transpose(-1, -2)).tril(-1)
+    eye = torch.eye(chunk, device=q.device, dtype=q.dtype)
+    solved = torch.linalg.solve_triangular(eye + strict, torch.cat([kb, vb], dim=-1), upper=False)
+    w, u = solved[..., :head_dim], solved[..., head_dim:]
+    qk = (q @ k.transpose(-1, -2)).tril()
+    state = q.new_zeros(batch_size, n_heads, head_dim, head_dim)
+    outputs = []
+    for c in range(n_chunks):
+        state_t = state.transpose(-1, -2)
+        u_eff = u[:, :, c] - w[:, :, c] @ state_t
+        outputs.append(q[:, :, c] @ state_t + qk[:, :, c] @ u_eff)
+        state = state + u_eff.transpose(-1, -2) @ k[:, :, c]
+    out = torch.stack(outputs, dim=2).reshape(batch_size, n_heads, n_chunks * chunk, head_dim)
+    return out[:, :, :seq_len]
+
 class DeltaRuleMixer(nn.Module):
-    def __init__(self, d_inner, n_heads, d_conv=4):
+    def __init__(self, d_inner, n_heads, d_conv=4, chunk=64):
         super().__init__()
         if d_inner <= 0 or n_heads <= 0 or d_inner % n_heads != 0:
             raise ValueError("d_inner must be positive and divisible by n_heads")
@@ -22,8 +52,10 @@ class DeltaRuleMixer(nn.Module):
             padding=d_conv - 1,
         )
         self.beta_proj = nn.Linear(d_inner, n_heads)
+        self.chunk = chunk
+        self.out_norm = nn.LayerNorm(self.head_dim)
 
-    def forward(self, x):
+    """def forward(self, x):
         batch_size, seq_len, _ = x.shape
         qkv = self.qkv_proj(x)
         qkv = self.conv(qkv.transpose(1, 2))[..., :seq_len].transpose(1, 2)
@@ -45,6 +77,21 @@ class DeltaRuleMixer(nn.Module):
             state = state + rate.unsqueeze(-1) * error.unsqueeze(-1) * key.unsqueeze(-2)
             outputs.append(torch.einsum("bhvk,bhk->bhv", state, q[:, :, index]))
         return torch.stack(outputs, dim=2).transpose(1, 2).reshape(batch_size, seq_len, self.d_inner)
+    """
+    def forward(self, x):
+        batch_size, seq_len, _ = x.shape
+        qkv = self.qkv_proj(x)
+        qkv = F.silu(self.conv(qkv.transpose(1, 2))[..., :seq_len].transpose(1, 2))
+        q, k, v = qkv.chunk(3, dim=-1)
+        q = q.reshape(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2).float()
+        k = k.reshape(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2).float()
+        v = v.reshape(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2).float()
+        q = F.normalize(q, p=2, dim=-1)
+        k = F.normalize(k, p=2, dim=-1)
+        beta = torch.sigmoid(self.beta_proj(x)).transpose(1, 2).float()
+        out = delta_rule_chunkwise(q, k, v, beta, self.chunk)
+        out = self.out_norm(out)
+        return out.transpose(1, 2).reshape(batch_size, seq_len, self.d_inner).to(x.dtype)
 
 
 class DeltaNetBlock(nn.Module):
@@ -97,7 +144,16 @@ class DeltaNetLanguageModel(nn.Module):
         )
         self.final_norm = nn.LayerNorm(d_model)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
-        self.lm_head.weight = self.token_embedding.weight
+        #self.lm_head.weight = self.token_embedding.weight
+        nn.init.normal_(self.token_embedding.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.02)
+        if pad_id is not None:
+            with torch.no_grad():
+                self.token_embedding.weight[pad_id].zero_()
+        residual_scale = 1.0 / math.sqrt(2 * n_layers)
+        with torch.no_grad():
+            for block in self.blocks:
+                block.out_proj.weight.mul_(residual_scale)
 
     def forward(self, input_ids, targets=None):
         if input_ids.ndim != 2:
