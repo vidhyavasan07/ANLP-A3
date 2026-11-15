@@ -4,7 +4,13 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-
+try:
+    from .triton_scan import selective_scan
+except ImportError:
+    try:
+        from triton_scan import selective_scan
+    except ImportError:
+        selective_scan = None
 class SelectiveStateSpace(nn.Module):
     def __init__(self, d_inner, d_state, dt_rank):
         super().__init__()
@@ -65,6 +71,8 @@ class SelectiveStateSpace(nn.Module):
         C = C.float()
         xf = x.float()
         A = -torch.exp(self.A_log.float())
+        if selective_scan is not None and x.is_cuda:
+            return selective_scan(xf, dt, A, B, C, self.D.float()).to(dtype)
         log_decay = (dt.unsqueeze(-1) * A).clamp(min=-5.0)
         drive = dt.unsqueeze(-1) * B.unsqueeze(2) * xf.unsqueeze(-1)
         state = xf.new_zeros(batch_size, self.d_inner, self.d_state)
