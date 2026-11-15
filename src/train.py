@@ -1,4 +1,5 @@
 import argparse
+from html import parser
 import json
 import os
 import random
@@ -59,6 +60,8 @@ def parse_args():
     parser.add_argument("--wandb-run-name")
     parser.add_argument("--max-text-len", type=int, default=0)
     parser.add_argument("--steps-per-epoch", type=int, default=0)
+    parser.add_argument("--start-window", type=int, default=0)
+    parser.add_argument("--curriculum-frac", type=float, default=0.6)
     return parser.parse_args()
 
 
@@ -163,6 +166,12 @@ def evaluate(model, loader, device, pad_id):
         return None, None
     return total_loss / total_batches, correct / max(count, 1)
 
+def window_length(step, total_steps, start, end, frac):
+    if start <= 0 or start >= end or frac <= 0:
+        return end
+    progress = min(1.0, step / max(1.0, frac * total_steps))
+    return min(end, int(round(start * (end / start) ** progress)))
+
 def main():
     args = parse_args()
     if args.output_dir is None:
@@ -266,10 +275,7 @@ def main():
         )
         model_class = DeltaNetLanguageModel
     model = model_class(**model_config).to(device)
-    """optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
-    )
-    """
+    
     decay, no_decay = [], []
     for name, p in model.named_parameters():
         if p.ndim < 2 or name.endswith(("A_log", ".D")):
@@ -347,6 +353,12 @@ def main():
             for batch_index, (input_ids, targets) in enumerate(train_loader, start=1):
                 input_ids = input_ids.to(device, non_blocking=True)
                 targets = targets.to(device, non_blocking=True)
+                cur_len = window_length(
+                    global_step, args.epochs * steps_per_epoch,
+                    args.start_window, args.max_seq_len, args.curriculum_frac,
+                )
+                input_ids = input_ids[:, :cur_len]
+                targets = targets[:, :cur_len]
 
                 optimizer.zero_grad(set_to_none=True)
                 _, loss = model(input_ids, targets)
@@ -359,7 +371,6 @@ def main():
                 epoch_batches += 1
                 running_loss += loss.item()
                 if run is not None and global_step % args.log_every == 0:
-                    #run.log({"train/loss": loss.item(), "epoch": epoch}, step=global_step)
                     run.log({"train/loss": loss.item(), "lr": scheduler.get_last_lr()[0], "epoch": epoch}, step=global_step)
             
                 if batch_index % args.log_every == 0:
@@ -374,12 +385,7 @@ def main():
                 
 
             train_loss = running_loss / max(epoch_batches, 1)
-            """validation_loss = (
-                evaluate(model, validation_loader, device)
-                if validation_loader is not None
-                else None
-            )
-            """
+
             validation_loss, validation_acc = (
                 evaluate(model, validation_loader, device, tokenizer.pad_id)
                 if validation_loader is not None
