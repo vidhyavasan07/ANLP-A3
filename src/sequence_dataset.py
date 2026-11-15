@@ -3,8 +3,7 @@ import torch
 from torch.utils.data import Dataset
 
 
-
-"""def build_input_target(ciphertext, plaintext, tokenizer, max_seq_len):
+def build_input_target(ciphertext, plaintext, tokenizer, max_seq_len):
     if max_seq_len < 4:
         raise ValueError("max_seq_len must be at least 4")
 
@@ -33,8 +32,8 @@ from torch.utils.data import Dataset
     sep_position = len(cipher_ids) + 1
     targets[:sep_position] = tokenizer.pad_id
     return input_ids, targets
-"""
-NOISE_SYMBOLS = frozenset("!'+,-./:;<=>?[]_{}")
+
+"""NOISE_SYMBOLS = frozenset("!'+,-./:;<=>?[]_{}")
 
 
 def build_input_target(ciphertext, plaintext, tokenizer, max_seq_len):
@@ -43,7 +42,7 @@ def build_input_target(ciphertext, plaintext, tokenizer, max_seq_len):
     input_ids = torch.tensor(tokenizer.encode(core[:length]), dtype=torch.long)
     targets = torch.tensor(tokenizer.encode(plaintext[:length]), dtype=torch.long)
     return input_ids, targets
-
+"""
 class PairedTextDataset(Dataset):
     def __init__(self, cipher_path, plaintext_path, tokenizer, max_seq_len, max_text_len=0):
         self.cipher_path = str(cipher_path)

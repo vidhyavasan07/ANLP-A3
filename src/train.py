@@ -60,8 +60,7 @@ def parse_args():
     parser.add_argument("--wandb-run-name")
     parser.add_argument("--max-text-len", type=int, default=0)
     parser.add_argument("--steps-per-epoch", type=int, default=0)
-    parser.add_argument("--start-window", type=int, default=0)
-    parser.add_argument("--curriculum-frac", type=float, default=0.6)
+    
     return parser.parse_args()
 
 
@@ -353,13 +352,6 @@ def main():
             for batch_index, (input_ids, targets) in enumerate(train_loader, start=1):
                 input_ids = input_ids.to(device, non_blocking=True)
                 targets = targets.to(device, non_blocking=True)
-                cur_len = window_length(
-                    global_step, args.epochs * steps_per_epoch,
-                    args.start_window, args.max_seq_len, args.curriculum_frac,
-                )
-                input_ids = input_ids[:, :cur_len]
-                targets = targets[:, :cur_len]
-
                 optimizer.zero_grad(set_to_none=True)
                 _, loss = model(input_ids, targets)
                 loss.backward()
