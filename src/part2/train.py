@@ -65,7 +65,7 @@ def run_epoch(model, loader, device, criterion, optimizer=None):
     return metrics
 
 
-def train_one(model_name, feature, seed, train_loader, validation_loader, test_loader, in_channels, args, device, hub_api=None, group="architecture"):
+def _train_one(model_name, feature, seed, train_loader, validation_loader, test_loader, in_channels, args, device, hub_api=None, group="architecture", wandb_run=None):
     set_seed(seed)
     model = build_model(
         model_name,
@@ -85,8 +85,25 @@ def train_one(model_name, feature, seed, train_loader, validation_loader, test_l
     best_epoch = 0
 
     for epoch in range(1, args.epochs + 1):
-        run_epoch(model, train_loader, device, criterion, optimizer)
+        train_metrics = run_epoch(model, train_loader, device, criterion, optimizer)
         validation_metrics = run_epoch(model, validation_loader, device, criterion)
+        if wandb_run is not None:
+            wandb_run.log(
+                {
+                    "epoch": epoch,
+                    "train/loss": train_metrics["loss"],
+                    "train/accuracy": train_metrics["accuracy"],
+                    "train/precision": train_metrics["precision"],
+                    "train/recall": train_metrics["recall"],
+                    "train/f1": train_metrics["f1"],
+                    "validation/loss": validation_metrics["loss"],
+                    "validation/accuracy": validation_metrics["accuracy"],
+                    "validation/precision": validation_metrics["precision"],
+                    "validation/recall": validation_metrics["recall"],
+                    "validation/f1": validation_metrics["f1"],
+                },
+                step=epoch,
+            )
         if validation_metrics["f1"] > best_validation_f1:
             best_validation_f1 = validation_metrics["f1"]
             best_epoch = epoch
@@ -113,6 +130,11 @@ def train_one(model_name, feature, seed, train_loader, validation_loader, test_l
     test_metrics["best_epoch"] = best_epoch
     test_metrics["best_validation_f1"] = best_validation_f1
     test_metrics["checkpoint"] = str(checkpoint_path)
+    if wandb_run is not None:
+        wandb_run.log({f"test/{metric}": test_metrics[metric] for metric in METRIC_NAMES})
+        wandb_run.summary["best_epoch"] = best_epoch
+        wandb_run.summary["best_validation_f1"] = best_validation_f1
+        wandb_run.summary["checkpoint"] = str(checkpoint_path)
     if hub_api is not None:
         path_in_repo = f"{group}/{feature}/{model_name}/seed_{seed}.pt"
         hub_api.upload_file(
@@ -122,7 +144,52 @@ def train_one(model_name, feature, seed, train_loader, validation_loader, test_l
             repo_type="model",
         )
         test_metrics["hf_file"] = f"https://huggingface.co/{args.hf_repo_id}/blob/main/{path_in_repo}"
+        if wandb_run is not None:
+            wandb_run.summary["hf_file"] = test_metrics["hf_file"]
     return test_metrics
+
+
+def train_one(model_name, feature, seed, train_loader, validation_loader, test_loader, in_channels, args, device, hub_api=None, group="architecture"):
+    wandb_run = None
+    if args.wandb_mode != "disabled":
+        import wandb
+
+        group_name = f"{group}/{feature}/{model_name}"
+        run_name = f"{group}-{feature}-{model_name}-seed-{seed}"
+        wandb_run = wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=run_name,
+            group=group_name,
+            job_type=group,
+            mode=args.wandb_mode,
+            tags=[group, feature, model_name, f"seed-{seed}"],
+            config={
+                **config_from_args(args),
+                "model": model_name,
+                "feature": feature,
+                "seed": seed,
+                "experiment": group,
+            },
+        )
+    try:
+        return _train_one(
+            model_name,
+            feature,
+            seed,
+            train_loader,
+            validation_loader,
+            test_loader,
+            in_channels,
+            args,
+            device,
+            hub_api,
+            group,
+            wandb_run,
+        )
+    finally:
+        if wandb_run is not None:
+            wandb_run.finish()
 
 
 def summarize(runs):
@@ -238,8 +305,12 @@ def parse_args():
     parser.add_argument("--output", default="output/part2/results.json")
     parser.add_argument("--details-output", default="output/part2/training_details.json")
     parser.add_argument("--architecture-results")
+    parser.add_argument("--reuse-bert-from-architecture", action="store_true")
     parser.add_argument("--hf-repo-id", default=os.environ.get("HF_REPO_ID"))
     parser.add_argument("--hf-private", action="store_true")
+    parser.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", "anlp-a3-part2"))
+    parser.add_argument("--wandb-entity", default=os.environ.get("WANDB_ENTITY"))
+    parser.add_argument("--wandb-mode", choices=("online", "offline", "disabled"), default="online")
     parser.add_argument("--ta", action="store_true")
     return parser.parse_args()
 
@@ -291,7 +362,8 @@ def main():
                 architecture_sage = entry
 
     if args.experiment in ("all", "ablation"):
-        reused_sage = architecture_sage
+        reuse_bert = args.reuse_bert_from_architecture or external_architecture is not None
+        reused_sage = architecture_sage if reuse_bert else None
         for feature in args.features:
             if feature == "bert" and reused_sage is not None:
                 entry = reused_sage
