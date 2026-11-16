@@ -9,7 +9,7 @@ import time
 import torch
 from torch.utils.data import DataLoader, Subset
 
-try:  # Support both ``python src/train.py`` and ``python -m src.train``.
+try:  
     from .char_tokenizer import CharacterTokenizer
     from .sequence_dataset import PairedTextDataset, collate_sequences
     from .transformer import DecoderOnlyTransformer
@@ -62,6 +62,7 @@ def parse_args():
     parser.add_argument("--wandb-run-name")
     parser.add_argument("--max-text-len", type=int, default=0)
     parser.add_argument("--steps-per-epoch", type=int, default=0)
+    parser.add_argument("--layer-pattern", default=None)
     
     return parser.parse_args()
 
@@ -134,20 +135,7 @@ def get_secret(name):
         return None
 
 
-"""def evaluate(model, loader, device):
-    model.eval()
-    total_loss = 0.0
-    total_batches = 0
-    with torch.no_grad():
-        for input_ids, targets in loader:
-            input_ids = input_ids.to(device, non_blocking=True)
-            targets = targets.to(device, non_blocking=True)
-            _, loss = model(input_ids, targets)
-            total_loss += loss.item()
-            total_batches += 1
-    model.train()
-    return total_loss / total_batches if total_batches else None
-"""
+
 def evaluate(model, loader, device, pad_id):
     model.eval()
     total_loss, total_batches = 0.0, 0
@@ -216,12 +204,9 @@ def main():
     else:
         print("No validation split found; validation loss will be skipped.")
 
-    # Build the vocabulary from training text only to avoid validation leakage.
+    
     tokenizer = CharacterTokenizer.from_jsonl(train_cipher, train_text)
-    """train_dataset = PairedTextDataset(
-        train_cipher, train_text, tokenizer, args.max_seq_len
-    )
-    """
+    
     train_dataset = PairedTextDataset(
        train_cipher, train_text, tokenizer, args.max_seq_len,
        max_text_len=args.max_text_len,
@@ -266,15 +251,30 @@ def main():
         model_config.update({"n_heads": args.n_heads, "d_ff": args.d_ff})
         model_class = DecoderOnlyTransformer
     elif args.model == "mamba":
-        model_config.update(
-            {"d_state": args.d_state, "d_conv": args.d_conv, "expand": args.expand}
-        )
+        model_config.update({
+            "d_state": args.d_state,
+            "d_conv": args.d_conv,
+            "expand": args.expand,
+        })
         model_class = MambaLanguageModel
-    else:
-        model_config.update(
-            {"n_heads": args.n_heads, "d_conv": args.d_conv, "expand": args.expand}
-        )
+    elif args.model == "deltanet":
+        model_config.update({
+            "n_heads": args.n_heads,
+            "d_conv": args.d_conv,
+            "expand": args.expand,
+        })
         model_class = DeltaNetLanguageModel
+    else:
+        model_config.update({
+            "n_heads": args.n_heads,
+            "d_state": args.d_state,
+            "d_conv": args.d_conv,
+            "expand": args.expand,
+        })
+        model_class = HybridLanguageModel
+        if args.layer_pattern is not None:
+            model_config["layer_pattern"] = args.layer_pattern
+        model_class = HybridLanguageModel
     model = model_class(**model_config).to(device)
     
     decay, no_decay = [], []
