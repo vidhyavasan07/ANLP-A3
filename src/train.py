@@ -15,18 +15,20 @@ try:  # Support both ``python src/train.py`` and ``python -m src.train``.
     from .transformer import DecoderOnlyTransformer
     from .mamba import MambaLanguageModel
     from .deltanet import DeltaNetLanguageModel
+    from .hybrid import HybridLanguageModel
 except ImportError:
     from char_tokenizer import CharacterTokenizer
     from sequence_dataset import PairedTextDataset, collate_sequences
     from transformer import DecoderOnlyTransformer
     from mamba import MambaLanguageModel
     from deltanet import DeltaNetLanguageModel
+    from hybrid import HybridLanguageModel
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--model", choices=("transformer", "mamba", "deltanet"), default="transformer"
+        "--model", choices=("transformer", "mamba", "deltanet","hybrid"), default="transformer"
     )
     parser.add_argument(
         "--data-dir",
